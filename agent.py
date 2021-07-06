@@ -23,11 +23,12 @@ import argparse
 import datetime
 import random
 import torch
+from collections import defaultdict
 
 MAX_STEER = 2.84
 MAX_SPEED = 0.22
 MIN_SPEED = 0.
-THRESHOLD_DISTANCE_2_GOAL = 0.02
+THRESHOLD_DISTANCE_2_GOAL = 0.05
 GRID = 5.
 THETA0 = np.pi/4
 
@@ -45,8 +46,9 @@ show_animation = True
 class ContinuousDubinGym(gym.Env):
 
 	def __init__(self):
-		super(DubinGym,self).__init__()
+		super(ContinuousDubinGym,self).__init__()		
 		metadata = {'render.modes': ['console']}
+		print("Initialising Continuous Dubin Gym Enviuronment...")
 		self.action_space = spaces.Box(np.array([0., -2.84]), np.array([0.22, 2.84]), dtype = np.float16) # max rotational velocity of burger is 2.84 rad/s
 		low = np.array([-1.,-1.,-4.])
 		high = np.array([1.,1.,4.])
@@ -54,8 +56,8 @@ class ContinuousDubinGym(gym.Env):
 		self.target = [0., 0., 1.57]
 		self.pose = [0., 0., 1.57]
 		self.action = [0., 0.]
-		self.traj_x = [self.pose[0]*MAX_X]
-		self.traj_y = [self.pose[1]*MAX_Y]
+		self.traj_x = [self.pose[0]]
+		self.traj_y = [self.pose[1]]
 		self.traj_yaw = [self.pose[2]]
 
 	def reset(self): 
@@ -66,14 +68,20 @@ class ContinuousDubinGym(gym.Env):
 		self.target[0], self.target[1] = random.choice([[x, y], [y, x]])
 
 		head_to_target = self.get_heading(self.pose, self.target)
-		yaw = random.uniform(theta - THETA0, theta + THETA0)
+		yaw = random.uniform(head_to_target - THETA0, head_to_target + THETA0)
 
 		self.pose[2] = yaw
 		self.target[2] = yaw
 		self.traj_x = [0.]
 		self.traj_y = [0.]
 		self.traj_yaw = [self.pose[2]]
-		return np.array([(self.target[0] - self.pose[0])/GRID, (self.target[1] - self.pose[1])/GRID, head_to_target - self.pose[2]])
+
+		print("Reset target to : [{:.2f}, {:.2f}]".format(self.target[0], self.target[1]))
+
+		obs = [(self.target[0] - self.pose[0])/GRID, (self.target[1] - self.pose[1])/GRID, head_to_target - self.pose[2]]
+		obs = [round(x, 2) for x in obs]
+
+		return np.array(obs)
 
 	def get_distance(self,x1,x2):
 		return math.sqrt((x1[0] - x2[0])**2 + (x1[1] - x2[1])**2)
@@ -99,10 +107,11 @@ class ContinuousDubinGym(gym.Env):
 		headingError = abs(alpha)
 		alongTrackError = abs(x - x_target) + abs(y - y_target)		
 
-		return -1*(abs(crossTrackError)**2 + alongTrackError + 3*abs headingError/1.57)/6
+		return -1*(abs(crossTrackError)**2 + alongTrackError + 3*headingError/1.57)/6
 
 	def check_goal(self):
-		if abs(self.pose[0] < GRID) or abs(self.pose[1] < GRID):
+		done = False
+		if abs(self.pose[0]) < GRID and abs(self.pose[1]) < GRID:
 			if(abs(self.pose[0]-self.target[0]) < THRESHOLD_DISTANCE_2_GOAL and  abs(self.pose[1]-self.target[1]) < THRESHOLD_DISTANCE_2_GOAL):
 				done = True
 				reward = 10
@@ -120,12 +129,16 @@ class ContinuousDubinGym(gym.Env):
 		reward = 0
 		done = False
 		info = {}
-		self.action = action
-		self.pose = self.update_state(self.pose, action, 0.05) # 0.005 Modify time discretization
+		self.action = [round(x, 2) for x in action]
+		self.pose = self.update_state(self.pose, self.action, 0.05) # 0.005 Modify time discretization
+		head_to_target = self.get_heading(self.pose, self.target)
 
 		done, reward = self.check_goal()
 
-		return np.array([(self.target[0] - self.pose[0])/GRID, (self.target[1] - self.pose[1])/GRID, head_to_target - self.pose[2]]), reward, done, info     
+		obs = [(self.target[0] - self.pose[0])/GRID, (self.target[1] - self.pose[1])/GRID, head_to_target - self.pose[2]]
+		obs = [round(x, 2) for x in obs]
+
+		return np.array(obs), reward, done, info     
 
 	def render(self):
 		self.traj_x.append(self.pose[0])
@@ -215,14 +228,16 @@ class ContinuousDubinGym(gym.Env):
 
 class DiscreteDubinGym(gym.Env):
 
-	def __init__(self, start_point):
-		super(DubinGym,self).__init__()
+	def __init__(self):
+		super(DiscreteDubinGym,self).__init__()
 		metadata = {'render.modes': ['console']}
+		print("Initialising Discrete Dubin Gym Enviuronment...")
 		self.action_space = spaces.Discrete(15) 
+		self.actSpace = defaultdict(list)
 		self.actSpace = {
-			[0., -2.5], [0., -1.25], [0., 0.], [0., 1.25], [0., 2.5],
-			[1.0, -2.5], [1., -1.25], [1., 0.], [1., 1.25], [1., 2.5],
-			[2., -2.5], [2., -1.25], [2., 0.], [2., 1.25], [2., 2.5]
+			0: [0., -2.5], 1: [0., -1.25], 2: [0., 0.], 3: [0., 1.25], 4: [0., 2.5],
+			5: [1.0, -2.5], 6: [1., -1.25], 7: [1., 0.], 8: [1., 1.25], 9: [1., 2.5],
+			10: [2., -2.5], 11: [2., -1.25], 12: [2., 0.], 13: [2., 1.25], 14: [2., 2.5]
 		}
 		low = np.array([-1.,-1.,-4.])
 		high = np.array([1.,1.,4.])
@@ -230,8 +245,8 @@ class DiscreteDubinGym(gym.Env):
 		self.target = [1., 0., 1.57]
 		self.pose = [0., 0., 1.57]
 		self.action = [0., 0.]
-		self.traj_x = [self.pose[0]*MAX_X]
-		self.traj_y = [self.pose[1]*MAX_Y]
+		self.traj_x = [self.pose[0]]
+		self.traj_y = [self.pose[1]]
 		self.traj_yaw = [self.pose[2]]
 
 	def reset(self):
@@ -241,14 +256,19 @@ class DiscreteDubinGym(gym.Env):
 
 		self.target[0], self.target[1] = random.choice([[x, y], [y, x]])
 		head_to_target = self.get_heading(self.pose, self.target)
-		yaw = random.uniform(theta - THETA0, theta + THETA0)
+		yaw = random.uniform(head_to_target - THETA0, head_to_target + THETA0)
 		self.pose[2] = yaw
 		self.target[2] = yaw
 
 		self.traj_x = [0.]
 		self.traj_y = [0.]
 		self.traj_yaw = [self.pose[2]]
-		return np.array([(self.target[0] - self.pose[0])/GRID, (self.target[1] - self.pose[1])/GRID, head_to_target - self.pose[2]])
+		print("Reset target to : [{:.2f}, {:.2f}]".format(self.target[0], self.target[1]))
+
+		obs = [(self.target[0] - self.pose[0])/GRID, (self.target[1] - self.pose[1])/GRID, head_to_target - self.pose[2]]
+		obs = [round(x, 2) for x in obs]
+
+		return np.array(obs)
 
 	def get_distance(self,x1,x2):
 		return math.sqrt((x1[0] - x2[0])**2 + (x1[1] - x2[1])**2)
@@ -274,10 +294,11 @@ class DiscreteDubinGym(gym.Env):
 		headingError = abs(alpha)
 		alongTrackError = abs(x - x_target) + abs(y - y_target)		
 
-		return -1*(abs(crossTrackError)**2 + alongTrackError + 3*abs headingError/1.57)/6
+		return -1*(abs(crossTrackError)**2 + alongTrackError + 3*headingError/1.57)/6
 
 	def check_goal(self):
-		if abs(self.pose[0] < GRID) or abs(self.pose[1] < GRID):
+		done = False
+		if abs(self.pose[0]) < GRID and abs(self.pose[1]) < GRID:
 			if(abs(self.pose[0]-self.target[0])<THRESHOLD_DISTANCE_2_GOAL and  abs(self.pose[1]-self.target[1])<THRESHOLD_DISTANCE_2_GOAL):
 				done = True
 				reward = 10
@@ -296,10 +317,14 @@ class DiscreteDubinGym(gym.Env):
 		info = {}
 		self.action = self.actSpace[action]
 		self.pose = self.update_state(self.pose, self.action, 0.05) # 0.005 Modify time discretization
+		head_to_target = self.get_heading(self.pose, self.target)
 
 		done, reward = self.check_goal()
 
-		return np.array([(self.target[0] - self.pose[0])/GRID, (self.target[1] - self.pose[1])/GRID, head_to_target - self.pose[2]]), reward, done, info     
+		obs = [(self.target[0] - self.pose[0])/GRID, (self.target[1] - self.pose[1])/GRID, head_to_target - self.pose[2]]
+		obs = [round(x, 2) for x in obs]
+
+		return np.array(obs), reward, done, info     
 
 	def render(self):
 		self.traj_x.append(self.pose[0])
