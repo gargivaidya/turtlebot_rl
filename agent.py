@@ -1,13 +1,21 @@
 """
 This script defines the gym environment class for ContinuousDubinGym and DiscreteDubinGym
-
+Goal Task - 
+1. ContinuousDubinGym
+	Action Space - linear velocity [0., 0.20], rotational velocity [-2.80, 2.80]
+	Observation Space
+	Reward
+	Reset Condition
+2. DiscreteDubinGym
+	Action Space - linear velocity {0., 0.20}, rotational velocity {-2.50, -1.25, 0.0, 1.25, 2.50}
+	Observation Space
+	Reward
+	Reset Condition
 """
-
 import numpy as np
 import matplotlib.pyplot as plt
 import math
 import gym
-import sys
 from gym import spaces
 import time
 import itertools
@@ -15,11 +23,6 @@ import argparse
 import datetime
 import random
 import torch
-
-sys.path.append('./algorithm/SAC/')
-from sac import SAC
-from replay_memory import ReplayMemory
-from torch.utils.tensorboard import SummaryWriter
 
 MAX_STEER = 2.84
 MAX_SPEED = 0.22
@@ -42,48 +45,34 @@ show_animation = True
 
 class ContinuousDubinGym(gym.Env):
 
-	def __init__(self, start_point):
+	def __init__(self):
 		super(DubinGym,self).__init__()
 		metadata = {'render.modes': ['console']}
-		self.action_space = spaces.Box(np.array([-0.22, -2.84]), np.array([0.22, 2.84]), dtype = np.float32) # max rotational velocity of burger is 2.84 rad/s
+		self.action_space = spaces.Box(np.array([0., -2.84]), np.array([0.22, 2.84]), dtype = np.float16) # max rotational velocity of burger is 2.84 rad/s
 		low = np.array([-1.,-1.,-4.])
 		high = np.array([1.,1.,4.])
-		self.observation_space = spaces.Box(low, high, dtype=np.float32)
-		self.target = [0./MAX_X, 0./MAX_Y, 1.57]
-		self.pose = [start_point[0]/MAX_X, start_point[1]/MAX_Y, start_point[2]]
+		self.observation_space = spaces.Box(low, high, dtype=np.float16)
+		self.target = [0., 0., 1.57]
+		self.pose = [0., 0., 1.57]
 		self.action = [0., 0.]
 		self.traj_x = [self.pose[0]*MAX_X]
 		self.traj_y = [self.pose[1]*MAX_Y]
 		self.traj_yaw = [self.pose[2]]
 
 	def reset(self): 
+		self.pose = np.array([0., 0., 0.])
 		x = random.uniform(-1., 1.)
-		y = random.choice([-1., 1.])*math.sqrt(1. - x**2)
-		theta = self.get_heading([x, y], self.target)
-		yaw = random.uniform(theta - THETA0, theta + THETA0)
-		self.pose = np.array([x/MAX_X, y/MAX_Y, yaw])
-		self.traj_x = [x]
-		self.traj_y = [y]
-		self.traj_yaw = [yaw]
-		return np.array(self.pose)
+		y = random.choice([-1., 1.])
 
-	def get_reward(self):
-		x_target = self.target[0]
-		y_target = self.target[1]
-		yaw_target = self.target[2]
-		x = self.pose[0]
-		y = self.pose[1]
-		yaw_car = self.pose[2]
+		self.target[0], self.target[1] = random.choice([[x, y], [y, x]])
 		head_to_target = self.get_heading(self.pose, self.target)
-		"""
-		alpha = Difference (Angle made by the target waypoint wrt to x-axis(?),Current pose of the car)
-		"""
-		# alpha,idx_nxt = self.getAngularSeperationAndIdx()
-		alpha = head_to_target - self.pose[2]
-		ld = self.get_distance(self.pose, self.target)
-		crossTrackError = math.sin(alpha) * ld
-
-		return -1*(abs(crossTrackError)**2 + abs(x - x_target) + abs(y - y_target) + 3*abs (head_to_target - yaw_car)/1.57)/6
+		yaw = random.uniform(theta - THETA0, theta + THETA0)
+		self.pose[2] = yaw
+		self.target[2] = yaw
+		self.traj_x = [0.]
+		self.traj_y = [0.]
+		self.traj_yaw = [self.pose[2]]
+		return np.array([self.target[0] - self.pose[0], self.target[1] - self.pose[1], head_to_target - self.pose[2]])
 
 	def get_distance(self,x1,x2):
 		return math.sqrt((x1[0] - x2[0])**2 + (x1[1] - x2[1])**2)
@@ -91,30 +80,51 @@ class ContinuousDubinGym(gym.Env):
 	def get_heading(self, x1,x2):
 		return math.atan2((x2[1] - x1[1]), (x2[0] - x1[0]))		
 
+	def get_reward(self):
+		x_target = self.target[0]
+		y_target = self.target[1]
+		yaw_target = self.target[2]
+
+		x = self.pose[0]
+		y = self.pose[1]
+
+		yaw_car = self.pose[2]
+		head_to_target = self.get_heading(self.pose, self.target)
+
+		alpha = head_to_target - yaw_car
+		ld = self.get_distance(self.pose, self.target)
+		crossTrackError = math.sin(alpha) * ld
+
+		headingError = abs(alpha)
+		alongTrackError = abs(x - x_target) + abs(y - y_target)		
+
+		return -1*(abs(crossTrackError)**2 + alongTrackError + 3*abs headingError/1.57)/6
+
+	def check_goal(self):
+		if abs(self.pose[0] < 1.0) or abs(self.pose[1] < 1.0):
+			if(abs(self.pose[0]-self.target[0])<THRESHOLD_DISTANCE_2_GOAL and  abs(self.pose[1]-self.target[1])<THRESHOLD_DISTANCE_2_GOAL):
+				done = True
+				reward = 10
+				print("Goal Reached!")
+			else:
+				reward = self.get_reward()
+		else:
+			done = True
+			reward = -1
+			print("Outside Range")
+			
+		return done, reward
+
 	def step(self,action):
 		reward = 0
 		done = False
 		info = {}
 		self.action = action
-		self.pose = self.update_state(self.pose, action, 0.005) # 0.005 Modify time discretization
+		self.pose = self.update_state(self.pose, action, 0.05) # 0.005 Modify time discretization
 
+		done, reward = self.check_goal()
 
-		if ((abs(self.pose[0]) < 1.) and (abs(self.pose[1]) < 1.)):
-
-			if(abs(self.pose[0]-self.target[0])<THRESHOLD_DISTANCE_2_GOAL and  abs(self.pose[1]-self.target[1])<THRESHOLD_DISTANCE_2_GOAL):
-				reward = 10            
-				done = True
-				print('Goal Reached')
-				#print("Distance : {:.3f} {:.3f}".format(abs(self.pose[0]-self.target[0])*MAX_X, abs(self.pose[1]-self.target[1])*MAX_Y))
-			else:
-				reward = self.get_reward()	
-		else :
-			done = True
-			reward = -1.
-			print("Outside range")
-			#print("Distance : {:.3f} {:.3f}".format(abs(self.pose[0]-self.target[0])*MAX_X, abs(self.pose[1]-self.target[1])*MAX_Y))
-
-		return np.array(self.pose), reward, done, info     
+		return np.array([self.target[0] - self.pose[0], self.target[1] - self.pose[1], head_to_target - self.pose[2]]), reward, done, info     
 
 	def render(self):
 		self.traj_x.append(self.pose[0]*MAX_X)
@@ -133,25 +143,12 @@ class ContinuousDubinGym(gym.Env):
 		plt.title("Simulation")
 		plt.pause(0.0001)
 		
-
 	def close(self):
 		pass
 
 	def update_state(self, state, a, DT):
-		# print("Updating state")
 		lin_velocity = a[0]
 		rot_velocity = a[1]
-
-		if rot_velocity >= MAX_STEER:
-			rot_velocity = MAX_STEER
-		elif rot_velocity <= -MAX_STEER:
-			rot_velocity = -MAX_STEER
-
-		if lin_velocity > MAX_SPEED:
-			lin_velocity = MAX_SPEED
-		elif lin_velocity < MIN_SPEED:
-			lin_velocity = MIN_SPEED
-
 
 		state[0] = state[0] + lin_velocity * math.cos(state[2]) * DT
 		state[1] = state[1] + lin_velocity * math.sin(state[2]) * DT
@@ -211,12 +208,8 @@ class ContinuousDubinGym(gym.Env):
 				 np.array(outline[1, :]).flatten(), truckcolor)
 		plt.plot(np.array(fr_wheel[0, :]).flatten(),
 				 np.array(fr_wheel[1, :]).flatten(), truckcolor)
-		plt.plot(np.array(rr_wheel[0, :]).flatten(),
-				 np.array(rr_wheel[1, :]).flatten(), truckcolor)
 		plt.plot(np.array(fl_wheel[0, :]).flatten(),
 				 np.array(fl_wheel[1, :]).flatten(), truckcolor)
-		plt.plot(np.array(rl_wheel[0, :]).flatten(),
-				 np.array(rl_wheel[1, :]).flatten(), truckcolor)
 		plt.plot(x, y, "*")
 
 class DiscreteDubinGym(gym.Env):
@@ -224,27 +217,37 @@ class DiscreteDubinGym(gym.Env):
 	def __init__(self, start_point):
 		super(DubinGym,self).__init__()
 		metadata = {'render.modes': ['console']}
-		self.action_space = spaces.Discrete(15) 
+		self.action_space = spaces.Discrete(10) 
 		low = np.array([-1.,-1.,-4.])
 		high = np.array([1.,1.,4.])
 		self.observation_space = spaces.Box(low, high, dtype=np.float32)
-		self.target = [0./MAX_X, 0./MAX_Y, 1.57]
-		self.pose = [start_point[0]/MAX_X, start_point[1]/MAX_Y, start_point[2]]
+		self.target = [1., 0., 1.57]
+		self.pose = [0., 0., 1.57]
 		self.action = [0., 0.]
 		self.traj_x = [self.pose[0]*MAX_X]
 		self.traj_y = [self.pose[1]*MAX_Y]
 		self.traj_yaw = [self.pose[2]]
 
-	def reset(self): 
+	def reset(self):
+		self.pose = np.array([0., 0., 0.])
 		x = random.uniform(-1., 1.)
-		y = random.choice([-1., 1.])*math.sqrt(1. - x**2)
-		theta = self.get_heading([x, y], self.target)
+		y = random.choice([-1., 1.])
+
+		self.target[0], self.target[1] = random.choice([[x, y], [y, x]])
+		head_to_target = self.get_heading(self.pose, self.target)
 		yaw = random.uniform(theta - THETA0, theta + THETA0)
-		self.pose = np.array([x/MAX_X, y/MAX_Y, yaw])
-		self.traj_x = [x]
-		self.traj_y = [y]
-		self.traj_yaw = [yaw]
-		return np.array(self.pose)
+		self.pose[2] = yaw
+		self.target[2] = yaw
+		self.traj_x = [0.]
+		self.traj_y = [0.]
+		self.traj_yaw = [self.pose[2]]
+		return np.array([self.target[0] - self.pose[0], self.target[1] - self.pose[1], head_to_target - self.pose[2]])
+
+	def get_distance(self,x1,x2):
+		return math.sqrt((x1[0] - x2[0])**2 + (x1[1] - x2[1])**2)
+
+	def get_heading(self, x1,x2):
+		return math.atan2((x2[1] - x1[1]), (x2[0] - x1[0]))		
 
 	def get_reward(self):
 		x_target = self.target[0]
@@ -254,28 +257,34 @@ class DiscreteDubinGym(gym.Env):
 		y = self.pose[1]
 		yaw_car = self.pose[2]
 		head_to_target = self.get_heading(self.pose, self.target)
-		"""
-		alpha = Difference (Angle made by the target waypoint wrt to x-axis(?),Current pose of the car)
-		"""
-		# alpha,idx_nxt = self.getAngularSeperationAndIdx()
+
 		alpha = head_to_target - self.pose[2]
 		ld = self.get_distance(self.pose, self.target)
 		crossTrackError = math.sin(alpha) * ld
 
 		return -1*(abs(crossTrackError)**2 + abs(x - x_target) + abs(y - y_target) + 3*abs (head_to_target - yaw_car)/1.57)/6
 
-	def get_distance(self,x1,x2):
-		return math.sqrt((x1[0] - x2[0])**2 + (x1[1] - x2[1])**2)
-
-	def get_heading(self, x1,x2):
-		return math.atan2((x2[1] - x1[1]), (x2[0] - x1[0]))		
+	def check_goal(self):
+		if abs(self.pose[0] < 1.0) or abs(self.pose[1] < 1.0):
+			if(abs(self.pose[0]-self.target[0])<THRESHOLD_DISTANCE_2_GOAL and  abs(self.pose[1]-self.target[1])<THRESHOLD_DISTANCE_2_GOAL):
+				done = True
+				reward = 10
+				print("Goal Reached!")
+			else:
+				reward = self.get_reward()
+		else:
+			done = True
+			reward = -1
+			print("Outside Range")
+			
+		return done, reward
 
 	def step(self,action):
 		reward = 0
 		done = False
 		info = {}
 		self.action = action
-		self.pose = self.update_state(self.pose, action, 0.005) # 0.005 Modify time discretization
+		self.pose = self.update_state(self.pose, action, 0.05) # 0.005 Modify time discretization
 
 
 		if ((abs(self.pose[0]) < 1.) and (abs(self.pose[1]) < 1.)):
@@ -284,16 +293,14 @@ class DiscreteDubinGym(gym.Env):
 				reward = 10            
 				done = True
 				print('Goal Reached')
-				#print("Distance : {:.3f} {:.3f}".format(abs(self.pose[0]-self.target[0])*MAX_X, abs(self.pose[1]-self.target[1])*MAX_Y))
 			else:
 				reward = self.get_reward()	
 		else :
 			done = True
 			reward = -1.
 			print("Outside range")
-			#print("Distance : {:.3f} {:.3f}".format(abs(self.pose[0]-self.target[0])*MAX_X, abs(self.pose[1]-self.target[1])*MAX_Y))
 
-		return np.array(self.pose), reward, done, info     
+		return np.array([self.target[0] - self.pose[0], self.target[1] - self.pose[1], head_to_target - self.pose[2]]), reward, done, info     
 
 	def render(self):
 		self.traj_x.append(self.pose[0]*MAX_X)
@@ -317,20 +324,8 @@ class DiscreteDubinGym(gym.Env):
 		pass
 
 	def update_state(self, state, a, DT):
-		# print("Updating state")
 		lin_velocity = a[0]
 		rot_velocity = a[1]
-
-		if rot_velocity >= MAX_STEER:
-			rot_velocity = MAX_STEER
-		elif rot_velocity <= -MAX_STEER:
-			rot_velocity = -MAX_STEER
-
-		if lin_velocity > MAX_SPEED:
-			lin_velocity = MAX_SPEED
-		elif lin_velocity < MIN_SPEED:
-			lin_velocity = MIN_SPEED
-
 
 		state[0] = state[0] + lin_velocity * math.cos(state[2]) * DT
 		state[1] = state[1] + lin_velocity * math.sin(state[2]) * DT
@@ -390,11 +385,8 @@ class DiscreteDubinGym(gym.Env):
 				 np.array(outline[1, :]).flatten(), truckcolor)
 		plt.plot(np.array(fr_wheel[0, :]).flatten(),
 				 np.array(fr_wheel[1, :]).flatten(), truckcolor)
-		plt.plot(np.array(rr_wheel[0, :]).flatten(),
-				 np.array(rr_wheel[1, :]).flatten(), truckcolor)
 		plt.plot(np.array(fl_wheel[0, :]).flatten(),
 				 np.array(fl_wheel[1, :]).flatten(), truckcolor)
-		plt.plot(np.array(rl_wheel[0, :]).flatten(),
-				 np.array(rl_wheel[1, :]).flatten(), truckcolor)
+
 		plt.plot(x, y, "*") 
 
