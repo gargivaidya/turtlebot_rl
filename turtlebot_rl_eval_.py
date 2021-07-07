@@ -28,21 +28,12 @@ from sac import SAC
 from replay_memory import ReplayMemory
 from torch.utils.tensorboard import SummaryWriter
 
-# Gym Environment Constants
-MAX_VEL = -0.9 #0.22
-MAX_STEER = 1 # 2.84
-MAX_YAW = 2*np.pi
-MAX_X = 1
-MAX_Y = 1
-THRESHOLD_DISTANCE_2_GOAL =  0.2/max(MAX_X,MAX_Y)#0.6/max(MAX_X,MAX_Y)
-
-# Global Initialisation
-pos = [0,0]
-yaw_car = 0
-done = False
-episode_steps = 0
-x_pub = rospy.Publisher('/cmd_vel',Twist,queue_size=1)
-
+MAX_STEER = 2.84
+MAX_SPEED = 0.22
+MIN_SPEED = 0.
+THRESHOLD_DISTANCE_2_GOAL = 0.05
+GRID = 3.
+THETA0 = np.pi/4
 
 parser = argparse.ArgumentParser(description='PyTorch Soft Actor-Critic Args')
 parser.add_argument('--policy', default="Gaussian",
