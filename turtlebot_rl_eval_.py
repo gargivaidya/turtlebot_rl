@@ -203,7 +203,7 @@ critic_path = "models/sac_critic_burger_2021-07-06_16-14-21_"
 
 # Instantiate RL Environment and load saved model
 env =  ContinuousDubinGym()
-env.target = [1., 1., 1.57]
+env.target = [2.4, 1.5, 1.57]
 agent = SAC(env.observation_space.shape[0], env.action_space, args)
 memory = ReplayMemory(args.replay_size, args.seed)
 agent.load_model(actor_path, critic_path)
