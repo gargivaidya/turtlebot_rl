@@ -242,9 +242,11 @@ def pose_callback(pose_data):
 	q = (orientation.x,orientation.y,orientation.z,orientation.w)
 	
 	euler =  euler_from_quaternion(q[0], q[1], q[2], q[3])
-	head = math.atan2(pos[1], pos[0]) # Heading to the origin
+
+	head_to_target = env.get_heading([pos[0], pos[1]], env.target)
 	yaw = euler[2] 
-	state = np.array([(pos[0]/GRID), (pos[1]/GRID), yaw]) # golden1 model
+	state = [(env.target[0] - pos[0])/GRID, (env.target[1] - pos[1])/GRID, head_to_target - yaw]
+	state = np.array([round(x, 2) for x in state])
 	done = False # Ends episode
 
 	print("State : ", state)
