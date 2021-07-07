@@ -14,6 +14,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import math
 import gym
+from agent import ContinuousDubinGym, DiscreteDubinGym
 from gym import spaces
 from std_srvs.srv import Empty
 import argparse
@@ -21,7 +22,8 @@ import datetime
 import itertools
 import torch, gc
 
-
+import sys
+sys.path.append('./algorithm/SAC')
 from sac import SAC
 from replay_memory import ReplayMemory
 from torch.utils.tensorboard import SummaryWriter
@@ -80,73 +82,111 @@ parser.add_argument('--max_episode_length', type=int, default=3000, metavar='N',
 					help='max episode length (default: 3000)')
 args = parser.parse_args()
 
+class ContinuousDubinGym(gym.Env):
 
-class DeepracerGym(gym.Env):
-	'''
-	Open AI Gym API for Reinforcement Learning Task for Ground Vehicle in Gazebo
-	Defines the state, action, reward and reset functionalities for the Gazebo simulation via ROS interface
-	'''
 	def __init__(self):
-		super(DeepracerGym,self).__init__()		
-		n_actions = 2 #velocity,steering
+		super(ContinuousDubinGym,self).__init__()		
 		metadata = {'render.modes': ['console']}
-		self.action_space = spaces.Box(np.array([-0.22, -2.84]), np.array([0.22, 2.84]), dtype = np.float32) # speed and steering
+		print("Initialising Continuous Dubin Gym Enviuronment...")
+		self.action_space = spaces.Box(np.array([-0.22, -2.84]), np.array([0.22, 2.84]), dtype = np.float16) # max rotational velocity of burger is 2.84 rad/s
 		low = np.array([-1.,-1.,-4.])
 		high = np.array([1.,1.,4.])
-		self.observation_space = spaces.Box(low,high,dtype=np.float32)
-		self.target_point = [0./MAX_X, 0./MAX_Y, 1.57]
-		self.pose = [pos[0]/MAX_X, pos[1]/MAX_Y, yaw_car]
+		self.observation_space = spaces.Box(low, high, dtype=np.float16)
+		self.target = [0., 0., 1.57]
+		self.pose = [0., 0., 1.57]
 		self.action = [0., 0.]
-		self.traj_x = [self.pose[0]*MAX_X]
-		self.traj_y = [self.pose[1]*MAX_Y]
+		self.traj_x = [self.pose[0]]
+		self.traj_y = [self.pose[1]]
 		self.traj_yaw = [self.pose[2]]
 
-	def reset(self):
-		'''
-		Reset simulation and pose of the vehicle 
-		'''
-		global yaw_car
-		self.stop_car()        
-		try:
-			# pause physics
-			# reset simulation
-			# un-pause physics
-			print('Simulation reset')
-		except rospy.ServiceException as exc:
-			print("Reset Service did not process request: " + str(exc))
+	def reset(self): 
+		self.pose = np.array([0., 0., 0.])
+		x = random.uniform(-1., 1.)
+		y = random.choice([-1., 1.])
 
-		# Update agent pose
-		pose_deepracer = np.array([abs(pos[0]-self.target_point[0]),abs(pos[1]-self.target_point[1]), yaw_car],dtype=np.float32) #relative pose 
-		return pose_deepracer
+		self.target[0], self.target[1] = random.choice([[x, y], [y, x]])
+
+		head_to_target = self.get_heading(self.pose, self.target)
+		yaw = random.uniform(head_to_target - THETA0, head_to_target + THETA0)
+
+		self.pose[2] = yaw
+		self.target[2] = yaw
+		self.traj_x = [0.]
+		self.traj_y = [0.]
+		self.traj_yaw = [self.pose[2]]
+
+		print("Reset target to : [{:.2f}, {:.2f}]".format(self.target[0], self.target[1]))
+
+		obs = [(self.target[0] - self.pose[0])/GRID, (self.target[1] - self.pose[1])/GRID, head_to_target - self.pose[2]]
+		obs = [round(x, 2) for x in obs]
+
+		return np.array(obs)
+
+	def get_distance(self,x1,x2):
+		return math.sqrt((x1[0] - x2[0])**2 + (x1[1] - x2[1])**2)
+
+	def get_heading(self, x1,x2):
+		return math.atan2((x2[1] - x1[1]), (x2[0] - x1[0]))		
+
+	def get_reward(self):
+		x_target = self.target[0]
+		y_target = self.target[1]
+		yaw_target = self.target[2]
+
+		x = self.pose[0]
+		y = self.pose[1]
+
+		yaw_car = self.pose[2]
+		head_to_target = self.get_heading(self.pose, self.target)
+
+		alpha = head_to_target - yaw_car
+		ld = self.get_distance(self.pose, self.target)
+		crossTrackError = math.sin(alpha) * ld
+
+		headingError = abs(alpha)
+		alongTrackError = abs(x - x_target) + abs(y - y_target)		
+
+		return -1*(abs(crossTrackError)**2 + alongTrackError + 3*headingError/1.57)/6
+
+	def check_goal(self):
+		done = False
+		if abs(self.pose[0]) < GRID and abs(self.pose[1]) < GRID:
+			if(abs(self.pose[0]-self.target[0]) < THRESHOLD_DISTANCE_2_GOAL and  abs(self.pose[1]-self.target[1]) < THRESHOLD_DISTANCE_2_GOAL):
+				done = True
+				reward = 10
+				print("Goal Reached!")
+				self.stop_car()
+			else:
+				reward = self.get_reward()
+		else:
+			done = True
+			reward = -1
+			print("Outside Range")
+			self.stop_car()
+			
+		return done, reward
 
 	def step(self,action):
-		'''
-		Executes the action in Gazebo simulation and returns updated pose
-		'''
-		global yaw_car, x_pub, done
+		
+		reward = 0
+		done = False
+		info = {}
+		self.action = [round(x, 2) for x in action]
 		msg = Twist()
-		msg.linear.x = 0.11#action[0] * MAX_VEL
-		msg.angular.z = action[1] * MAX_STEER
+		msg.linear.x = self.action[0]
+		msg.angular.z = self.action[1]
 
 		print("Lin Vel : , Rot Vel : ", msg.linear.x, msg.angular.z)
 		x_pub.publish(msg)
 		time.sleep(0.02)
+		head_to_target = self.get_heading(self.pose, self.target)
 
-		reward = 0
-		info = {}
+		done, reward = self.check_goal()
 
-		# Check if Goal reached				
-		if(abs(pos[0]/MAX_X-self.target_point[0])<THRESHOLD_DISTANCE_2_GOAL and abs(pos[1]/MAX_Y-self.target_point[1])<THRESHOLD_DISTANCE_2_GOAL):
-			reward = 10            
-			done = True
-			print('Goal Reached')
-			print('Counter:',episode_steps)
-			self.stop_car()
+		obs = [(self.target[0] - self.pose[0])/GRID, (self.target[1] - self.pose[1])/GRID, head_to_target - self.pose[2]]
+		obs = [round(x, 2) for x in obs]
 
-		pose_deepracer = np.array([abs(pos[0]-self.target_point[0]),abs(pos[1]-self.target_point[1]), yaw_car],dtype=np.float32) #relative pose
-
-		return pose_deepracer, reward, done, info
-		  
+		return np.array(obs), reward, done, info  
 
 	def stop_car(self):
 		'''
@@ -157,14 +197,14 @@ class DeepracerGym(gym.Env):
 		msg.linear.x = 0.
 		msg.angular.z = 0.
 		x_pub.publish(msg)
-		time.sleep(1)
+		time.sleep(1)		
 
 # RL Model paths
-actor_path = "models/sac_actor_burger_1"
-critic_path = "models/sac_critic_burger_1"
+actor_path = "models/sac_actor_burger_2021-07-06_16-14-21_"
+critic_path = "models/sac_critic_burger_2021-07-06_16-14-21_"
 
 # Instantiate RL Environment and load saved model
-env =  DeepracerGym()
+env =  ContinuousDubinGym()
 agent = SAC(env.observation_space.shape[0], env.action_space, args)
 memory = ReplayMemory(args.replay_size, args.seed)
 agent.load_model(actor_path, critic_path)
@@ -231,7 +271,6 @@ def start():
 	Subscribe to robot pose topic and initiate callback thread
 	'''
 	global ts, episode_steps, action1, action2
-	torch.cuda.empty_cache()
 	rospy.init_node('burger_gym', anonymous=True)		
 	sub = pose_subscriber = rospy.Subscriber("/odom", Odometry, pose_callback)
 	rospy.spin()
