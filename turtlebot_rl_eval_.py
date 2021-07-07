@@ -35,6 +35,13 @@ THRESHOLD_DISTANCE_2_GOAL = 0.05
 GRID = 3.
 THETA0 = np.pi/4
 
+# Global Initialisation
+pos = [0,0]
+yaw_car = 0
+done = False
+episode_steps = 0
+x_pub = rospy.Publisher('/cmd_vel',Twist,queue_size=1)
+
 parser = argparse.ArgumentParser(description='PyTorch Soft Actor-Critic Args')
 parser.add_argument('--policy', default="Gaussian",
 					help='Policy Type: Gaussian | Deterministic (default: Gaussian)')
