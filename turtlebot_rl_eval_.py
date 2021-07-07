@@ -179,7 +179,7 @@ class ContinuousDubinGym(gym.Env):
 		time.sleep(0.02)
 		head_to_target = self.get_heading(self.pose, self.target)
 
-		done, reward = self.check_goal()
+		# done, reward = self.check_goal()
 
 		obs = [(self.target[0] - self.pose[0])/GRID, (self.target[1] - self.pose[1])/GRID, head_to_target - self.pose[2]]
 		obs = [round(x, 2) for x in obs]
@@ -247,16 +247,16 @@ def pose_callback(pose_data):
 	yaw = euler[2] 
 	state = [(env.target[0] - pos[0])/GRID, (env.target[1] - pos[1])/GRID, head_to_target - yaw]
 	state = np.array([round(x, 2) for x in state])
-	done = False # Ends episode
-
-	print("State : ", state)
-	
+	done = False
+	print("State : ", state)	
 	# Sample action from policy
 	action = agent.select_action(state, True)	
 
 	print("Network Output : ", action)
 
-	if done: 
+	if (env.target[0] - pos[0]) < THRESHOLD_DISTANCE_2_GOAL or (env.target[1] - pos[1]) < THRESHOLD_DISTANCE_2_GOAL :
+		print("Goal Reached")
+		done = True
 		# Stop the car and reset episode		
 		env.stop_car()
 		env.reset()
