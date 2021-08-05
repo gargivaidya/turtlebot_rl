@@ -149,7 +149,7 @@ class ContinuousDubinGym(gym.Env):
 	def check_goal(self):
 		done = False
 		if abs(self.pose[0]) < GRID and abs(self.pose[1]) < GRID:
-			if(abs(self.pose[0]-self.target[0]) < THRESHOLD_DISTANCE_2_GOAL and  abs(self.pose[1]-self.target[1]) < THRESHOLD_DISTANCE_2_GOAL):
+			if (abs(self.pose[0]-self.target[0]) < THRESHOLD_DISTANCE_2_GOAL and  abs(self.pose[1]-self.target[1]) < THRESHOLD_DISTANCE_2_GOAL):
 				done = True
 				reward = 10
 				print("Goal Reached!")
@@ -198,12 +198,12 @@ class ContinuousDubinGym(gym.Env):
 		time.sleep(1)		
 
 # RL Model paths
-actor_path = "models/sac_actor_burger_2021-07-06_16-14-21_"
-critic_path = "models/sac_critic_burger_2021-07-06_16-14-21_"
+actor_path = "models/eshika/sac_actor_burger_reward6"
+critic_path = "models/eshika/sac_critic_burger_reward6"
 
 # Instantiate RL Environment and load saved model
 env =  ContinuousDubinGym()
-env.target = [2.4, 1.5, 1.57]
+env.target = [1.0, -1.0, 1.57]
 agent = SAC(env.observation_space.shape[0], env.action_space, args)
 memory = ReplayMemory(args.replay_size, args.seed)
 agent.load_model(actor_path, critic_path)
@@ -254,12 +254,13 @@ def pose_callback(pose_data):
 
 	print("Network Output : ", action)
 
-	if (env.target[0] - pos[0]) < THRESHOLD_DISTANCE_2_GOAL or (env.target[1] - pos[1]) < THRESHOLD_DISTANCE_2_GOAL :
+	if (env.target[0] - pos[0]) < THRESHOLD_DISTANCE_2_GOAL and (env.target[1] - pos[1]) < THRESHOLD_DISTANCE_2_GOAL :
+		print(env.target[0] - pos[0], env.target[1] - pos[1])
 		print("Goal Reached")
 		done = True
 		# Stop the car and reset episode		
 		env.stop_car()
-		env.reset()
+		# env.reset()
 		sub.unregister()
 		print('Counter:',episode_steps)
 	else:
@@ -271,7 +272,7 @@ def start():
 	'''
 	Subscribe to robot pose topic and initiate callback thread
 	'''
-	global ts, episode_steps, action1, action2
+	global sub, ts, episode_steps, action1, action2
 	rospy.init_node('burger_gym', anonymous=True)		
 	sub = pose_subscriber = rospy.Subscriber("/odom", Odometry, pose_callback)
 	rospy.spin()
